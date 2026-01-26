@@ -13,11 +13,9 @@ from aiogram.types import CallbackQuery, Message
 
 
 # CONFIG
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment variables")
+BOT_TOKEN = "7566337984:AAHX7ivevAhgXA2AuGq_NafiL_oVWrsg7ss"
 CHAT_IDS = [
-    454262931,5429733148,8031949005
+    2014912715
 ]
 
 USER_AGENTS = [
@@ -32,7 +30,7 @@ HEADERS=get_headers()
 
 
 MAX_DESC_LEN = 600
-OLX_URL = "https://www.olx.pl/elektronika/telefony/smartfony-telefony-komorkowe/iphone/warszawa/?search%5Bdist%5D=300"
+OLX_URL = "https://www.olx.pl/elektronika/telefony/smartfony-telefony-komorkowe/iphone/warszawa/?search%5Bdist%5D=300&search%5Border%5D=created_at%3Adesc"
 
 
 IPHONE_PRICES = {
@@ -106,21 +104,6 @@ def detect_storage(text: str):
     m = re.search(r"\b(128|256|512)\b", t)
     return int(m.group(1)) if m else None
 
-def get_img_src(card):
-    img = card.find("img")
-    if not img:
-        return None
-
-    src = img.get("src")
-    if not src:
-        return None
-
-    src = src.strip()
-
-    if not src.startswith("http"):
-        return None
-
-    return src
 
 def parse_list():
     html = requests.get(OLX_URL, headers=get_headers(), timeout=15).text
@@ -129,7 +112,6 @@ def parse_list():
     ads = []
     cards = soup.find_all("div", {"data-testid": "l-card"})
 
-
     for card in cards:
         title_tag = card.find("h4")
         price_tag = card.find("p", {"data-testid": "ad-price"})
@@ -137,38 +119,146 @@ def parse_list():
 
         if not title_tag or not price_tag or not link_tag:
             continue
+
         price_val = clean_price(price_tag.text)
         if price_val is None:
             continue
-
-        img_url = get_img_src(card)
 
         ads.append({
             "title": title_tag.text.strip(),
             "price": price_val,
             "url": "https://www.olx.pl" + link_tag["href"],
-            "image": img_url
         })
 
-
     return ads
+
+
+def parse_parameters(soup: BeautifulSoup) -> dict:
+    params = {}
+
+    container = soup.find("div", {"data-testid": "ad-parameters-container"})
+    if not container:
+        return params
+
+
+    for p in container.find_all("p"):
+        txt = p.get_text(" ", strip=True)
+        if not txt:
+            continue
+
+
+        if ":" in txt:
+            k, v = txt.split(":", 1)
+            params[k.strip().lower()] = v.strip()
+        else:
+            params[txt.strip().lower()] = True
+
+    return params
+
+
+def storage_from_params(params: dict) -> int | None:
+    for key in ["wbudowana pamięć", "pamięć", "pamięć wbudowana"]:
+        val = params.get(key)
+        if not val:
+            continue
+        m = re.search(r"(\d+)\s*gb", val.lower())
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def model_from_params(params: dict) -> tuple[str | None, str | None]:
+    val = params.get("model telefonu")
+    if not val:
+        return None, None
+
+    t = val.lower()
+
+
+    m = re.search(r"\b(12|13|14|15|16)\b", t)
+    if not m:
+        return None, None
+    gen = m.group(1)
+
+
+    if "pro max" in t or "promax" in t or "pro-max" in t:
+        model = "pro max"
+    elif "pro" in t:
+        model = "pro"
+    else:
+        model = "base"
+
+    return gen, model
+
+def pick_best_from_srcset(srcset: str | None) -> str | None:
+    if not srcset:
+        return None
+    parts = [p.strip() for p in srcset.split(",") if p.strip()]
+    if not parts:
+        return None
+    url = parts[-1].split()[0].strip()
+    return url if url.startswith("http") else None
+
+
+def parse_main_image_from_ad_page(soup: BeautifulSoup) -> str | None:
+    img = soup.find("img", {"data-testid": "swiper-image"})
+    if img:
+        src = (img.get("src") or "").strip()
+        if src.startswith("http"):
+            return src
+        best = pick_best_from_srcset(img.get("srcset"))
+        if best:
+            return best
+
+    photo_block = soup.find("div", {"data-testid": "ad-photo"})
+    if photo_block:
+        img2 = photo_block.find("img")
+        if img2:
+            src = (img2.get("src") or "").strip()
+            if src.startswith("http"):
+                return src
+            best = pick_best_from_srcset(img2.get("srcset"))
+            if best:
+                return best
+
+    return None
 
 
 def parse_ad_page(url: str):
     html = requests.get(url, headers=get_headers(), timeout=20).text
     soup = BeautifulSoup(html, "lxml")
 
-    desc = soup.find("div", {"data-testid": "ad_description"})
-    desc_text = desc.text.strip() if desc else ""
+
+    desc = soup.find("div", {"data-testid": "ad-description"})
+    desc_text = desc.get_text("\n", strip=True) if desc else ""
+
 
     seller = soup.find("h4", {"data-testid": "seller-name"}) or soup.find("h4", class_="css-14tb3q5")
-    seller = seller.text.strip() if seller else "—"
+    seller = seller.get_text(strip=True) if seller else "—"
+
 
     location = soup.find("p", {"data-testid": "location-date"})
-    location = location.text.split("-")[0].strip() if location else "—"
+    location = location.get_text(" ", strip=True).split("-")[0].strip() if location else "—"
 
-    storage = detect_storage(desc_text)
-    return {"description": desc_text, "seller": seller, "location": location, "storage": storage}
+
+    params = parse_parameters(soup)
+
+    storage = storage_from_params(params)
+    gen, model = model_from_params(params)
+
+    image = parse_main_image_from_ad_page(soup)
+
+    return {
+        "description": desc_text,
+        "seller": seller,
+        "location": location,
+        "storage": storage,
+        "gen": gen,
+        "model": model,
+        "params": params,
+        "image": image,
+    }
+
 
 bot = Bot(BOT_TOKEN)
 
@@ -236,13 +326,16 @@ async def main():
         if is_sent(ad["url"]):
             continue
 
-        gen, model = detect_model(ad["title"])
+        details = parse_ad_page(ad["url"])
+
+        gen = details.get("gen")
+        model = details.get("model")
+        storage = details.get("storage")
+
         if not gen:
             stats["no_model"] += 1
             continue
 
-        details = parse_ad_page(ad["url"])
-        storage = details["storage"] or detect_storage(ad["title"])
         if not storage:
             stats["no_storage"] += 1
             continue
@@ -266,25 +359,12 @@ async def main():
         mark_sent(ad["url"])
         await send_deal(deal)
         stats["sent"] += 1
-
         await asyncio.sleep(2)
 
 
     print("STATS:", stats)
 
-def normalize_img_url(src: str | None) -> str | None:
-    if not src:
-        return None
-    src = src.strip()
-    if not src:
-        return None
-    if src.startswith("//"):
-        return "https:" + src
-    if src.startswith("/"):
-        return None
-    if not src.startswith("http"):
-        return None
-    return src
+
 
 async def main_loop():
     while True:
