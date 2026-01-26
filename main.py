@@ -13,9 +13,11 @@ from aiogram.types import CallbackQuery, Message
 
 
 # CONFIG
-BOT_TOKEN = "7566337984:AAHX7ivevAhgXA2AuGq_NafiL_oVWrsg7ss"
+os.getenv("BOT_TOKEN")  # берётся из Environment Variables
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is not set in environment variables")
 CHAT_IDS = [
-    2014912715
+    454262931,5429733148,8031949005
 ]
 
 USER_AGENTS = [
@@ -380,6 +382,7 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
 
 
 
