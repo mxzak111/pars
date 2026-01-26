@@ -32,7 +32,7 @@ HEADERS=get_headers()
 
 
 MAX_DESC_LEN = 600
-OLX_URL = "https://www.olx.pl/elektronika/telefony/smartfony-telefony-komorkowe/iphone/warszawa/?search%5Bdist%5D=300&search%5Border%5D=created_at%3Adesc"
+OLX_URL = "https://www.olx.pl/elektronika/telefony/smartfony-telefony-komorkowe/iphone/warszawa/?search%5Bdist%5D=150&search%5Border%5D=created_at%3Adesc"
 
 
 IPHONE_PRICES = {
@@ -382,6 +382,7 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
 
 
 
