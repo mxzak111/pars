@@ -17,7 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in environment variables")
 CHAT_IDS = [
-    454262931,5429733148,8031949005
+    454262931,5429733148,8031949005,355473079
 ]
 
 USER_AGENTS = [
@@ -382,6 +382,7 @@ async def main_loop():
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
+
 
 
 
