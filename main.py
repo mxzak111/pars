@@ -21,7 +21,7 @@ if not BOT_TOKEN:
 CHAT_IDS = [
     454262931,5429733148,8031949005,355473079
 ]
-ADMINS = {454262931,5429733148,8031949005,355473079}
+ADMINS = {454262931,5429733148,8031949005}
 
 
 USER_AGENTS = [
@@ -576,3 +576,4 @@ async def runner():
 
 if __name__ == "__main__":
     asyncio.run(runner())
+
