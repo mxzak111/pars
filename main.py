@@ -1,6 +1,6 @@
 import requests
-import os
 import re
+import os
 import random
 import sqlite3
 import asyncio
@@ -10,6 +10,8 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
+import time
+
 
 
 # CONFIG
@@ -19,6 +21,8 @@ if not BOT_TOKEN:
 CHAT_IDS = [
     454262931,5429733148,8031949005,355473079
 ]
+ADMINS = {454262931,5429733148,8031949005,355473079}
+
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -48,6 +52,58 @@ db = sqlite3.connect("ads.db")
 cur = db.cursor()
 cur.execute("CREATE TABLE IF NOT EXISTS sent_ads (url TEXT PRIMARY KEY)")
 db.commit()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS checked_ads (
+    url TEXT PRIMARY KEY,
+    checked_at INTEGER
+)
+""")
+db.commit()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS prices (
+    gen TEXT NOT NULL,
+    model TEXT NOT NULL,
+    storage INTEGER NOT NULL,
+    price INTEGER NOT NULL,
+    PRIMARY KEY (gen, model, storage)
+)
+""")
+
+db.commit()
+
+def get_market_price(gen: str, model: str, storage: int) -> int | None:
+    cur.execute(
+        "SELECT price FROM prices WHERE gen=? AND model=? AND storage=?",
+        (gen, model, storage)
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
+def set_market_price(gen: str, model: str, storage: int, price: int) -> None:
+    cur.execute("""
+        INSERT OR REPLACE INTO prices(gen, model, storage, price)
+        VALUES (?, ?, ?, ?)
+    """, (gen, model, storage, price))
+    db.commit()
+
+
+def is_checked_recent(url: str, ttl_seconds: int = 1800) -> bool:
+    cur.execute("SELECT checked_at FROM checked_ads WHERE url=?", (url,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    return (int(time.time()) - row[0]) < ttl_seconds
+
+def mark_checked(url: str) -> None:
+    cur.execute(
+        "INSERT OR REPLACE INTO checked_ads(url, checked_at) VALUES (?, ?)",
+        (url, int(time.time()))
+    )
+    db.commit()
+
 
 def is_sent(url: str) -> bool:
     cur.execute("SELECT 1 FROM sent_ads WHERE url=?", (url,))
@@ -317,6 +373,133 @@ async def send_deal(deal: dict):
 
         await asyncio.sleep(0.3)
 
+dp = Dispatcher()
+dp.include_router(router)
+
+@router.message(CommandStart())
+async def start_cmd(message: Message):
+    await message.answer(
+        "Команды:\n"
+        "/price gen model storage price  — установить цену\n"
+        "пример: /price 13 pro 256 850\n"
+        "/getprice gen model storage — посмотреть цену\n"
+        "пример: /getprice 13 pro 256\n"
+    )
+
+@router.message(F.text.startswith("/price"))
+async def set_price_cmd(message: Message):
+    text = (message.text or "").strip()
+
+    # убираем кавычки, чтобы "pro max" стало pro max
+    text = text.replace('"', "").replace("“", "").replace("”", "").replace("'", "")
+    parts = text.split()
+
+    # ожидаем: /price gen model storage price
+    if len(parts) not in (5, 6):
+        return await message.answer(
+            "Формат:\n"
+            "/price <gen> <model> <storage> <price>\n"
+            "Примеры:\n"
+            "/price 13 pro 256 850\n"
+            "/price 13 promax 256 850\n"
+            "/price 13 pro max 256 850\n"
+            "/price 13 pro-max 256 850\n"
+            "/price 13 base 256 850\n"
+        )
+
+    gen = parts[1].lower()
+
+    if len(parts) == 5:
+        model_raw = parts[2].lower()
+        storage_str = parts[3]
+        price_str = parts[4]
+    else:
+        # len == 6: model = parts[2] + parts[3]
+        model_raw = (parts[2] + " " + parts[3]).lower()
+        storage_str = parts[4]
+        price_str = parts[5]
+
+    # нормализация model
+    model_raw = model_raw.replace("-", " ").strip()
+    if model_raw in ("promax", "pro max", "pro  max"):
+        model = "pro max"
+    elif model_raw == "pro":
+        model = "pro"
+    elif model_raw in ("base", "regular", "standard"):
+        model = "base"
+    else:
+        return await message.answer("model должен быть: base | pro | pro max")
+
+    try:
+        storage = int(storage_str)
+        price = int(price_str)
+    except:
+        return await message.answer("storage и price должны быть числами")
+
+    set_market_price(gen, model, storage, price)
+    await message.answer(f"✅ Цена сохранена: iPhone {gen} {model} {storage}GB = {price} PLN")
+
+
+
+@router.message(F.text.regexp(r"^/getprice\b"))
+async def get_price_cmd(message: Message):
+    text = (message.text or "").strip()
+
+    # кавычки нахуй, дефисы => пробел
+    text = text.replace('"', "").replace("“", "").replace("”", "").replace("'", "")
+    parts = text.split()
+
+    # /getprice 13 pro 256  (4)
+    # /getprice 13 pro max 256 (5)
+    if len(parts) not in (4, 5):
+        return await message.answer("Формат: /getprice <gen> <model> <storage>\nПример: /getprice 13 pro 256")
+
+    gen = parts[1].lower()
+
+    if len(parts) == 4:
+        model_raw = parts[2].lower()
+        storage_str = parts[3]
+    else:
+        model_raw = (parts[2] + " " + parts[3]).lower()
+        storage_str = parts[4]
+
+    model_raw = model_raw.replace("-", " ").strip()
+
+    if model_raw in ("promax", "pro max", "pro  max"):
+        model = "pro max"
+    elif model_raw == "pro":
+        model = "pro"
+    elif model_raw in ("base", "regular", "standard"):
+        model = "base"
+    else:
+        return await message.answer("model должен быть: base | pro | pro max")
+
+    try:
+        storage = int(storage_str)
+    except:
+        return await message.answer("storage должно быть числом")
+
+    price = get_market_price(gen, model, storage)
+    if price is None:
+        return await message.answer("Цена не найдена")
+
+    await message.answer(f"iPhone {gen} {model} {storage}GB = {price} PLN")
+
+def seed_prices_from_dict(d: dict):
+    for gen, models in d.items():
+        for model, storages in models.items():
+            for storage, price in storages.items():
+                cur.execute("""
+                    INSERT OR REPLACE INTO prices(gen, model, storage, price)
+                    VALUES (?, ?, ?, ?)
+                """, (gen, model, int(storage), int(price)))
+    db.commit()
+
+
+@router.message(F.text.startswith("/def"))
+async def def_cmd(message: Message):
+    seed_prices_from_dict(IPHONE_PRICES)
+
 
 async def main():
     ads = parse_list()
@@ -328,7 +511,12 @@ async def main():
         if is_sent(ad["url"]):
             continue
 
+        if is_checked_recent(ad["url"], ttl_seconds=1800):  # 30 минут
+            continue
+
         details = parse_ad_page(ad["url"])
+
+        mark_checked(ad["url"])
 
         gen = details.get("gen")
         model = details.get("model")
@@ -342,7 +530,7 @@ async def main():
             stats["no_storage"] += 1
             continue
 
-        market_price = IPHONE_PRICES.get(gen, {}).get(model, {}).get(storage)
+        market_price = get_market_price(gen, model, storage)
         if not market_price:
             stats["no_market"] += 1
             continue
@@ -361,7 +549,7 @@ async def main():
         mark_sent(ad["url"])
         await send_deal(deal)
         stats["sent"] += 1
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.2)
 
 
     print("STATS:", stats)
@@ -377,15 +565,14 @@ async def main_loop():
         except Exception as e:
             print("ERROR:", e)
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
 
+
+async def runner():
+    await asyncio.gather(
+        main_loop(),
+        dp.start_polling(bot),
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main_loop())
-
-
-
-
-
-
-
+    asyncio.run(runner())
